@@ -1,0 +1,16 @@
+{
+  "name": "yt-auto-seo-actions",
+  "version": "1.0.0",
+  "description": "YouTube Auto-Pilot SEO Studio — GitHub Actions Node.js automation script",
+  "main": "auto-seo.js",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node auto-seo.js",
+    "dry-run": "DRY_RUN=true node auto-seo.js"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
