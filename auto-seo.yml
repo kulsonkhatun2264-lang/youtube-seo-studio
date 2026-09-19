@@ -1,0 +1,245 @@
+# =============================================================================
+# .github/workflows/auto-seo.yml
+# YouTube Auto-Pilot SEO Studio — GitHub Actions Automation
+#
+# Runs a Node.js script on a scheduled cron that:
+#   1. Authenticates to YouTube via a long-lived OAuth2 refresh token
+#   2. Fetches all channel videos and computes SEO scores
+#   3. Fetches REAL YouTube search/trending data for poorly-scored videos
+#   4. Sends that YouTube data to Gemini API for optimization
+#   5. Pushes updated metadata back to YouTube
+#   6. Commits a run-report JSON to the repository
+# =============================================================================
+
+name: "YouTube Auto-Pilot SEO Optimizer"
+
+on:
+  schedule:
+    # Run every day at 03:00 UTC
+    - cron: "0 3 * * *"
+    # Also run every 6 hours (4x daily)
+    - cron: "0 */6 * * *"
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (do not actually update YouTube videos)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      score_threshold:
+        description: "Only optimize videos with SEO score below this value (0-100)"
+        required: false
+        default: "65"
+      max_videos:
+        description: "Maximum number of videos to process in this run"
+        required: false
+        default: "5"
+      region_code:
+        description: "YouTube region code for trending data (e.g. US, GB, IN)"
+        required: false
+        default: "US"
+
+concurrency:
+  group: auto-seo-run
+  cancel-in-progress: false
+
+jobs:
+  optimize-seo:
+    name: "Auto-Pilot SEO Optimization"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # -----------------------------------------------------------------------
+      # REQUIRED SECRETS — Configure these in GitHub → Settings → Secrets
+      # -----------------------------------------------------------------------
+      GEMINI_API_KEY:          ${{ secrets.GEMINI_API_KEY }}
+      YT_API_KEY:              ${{ secrets.YT_API_KEY }}
+      YT_OAUTH_CLIENT_ID:      ${{ secrets.YT_OAUTH_CLIENT_ID }}
+      YT_OAUTH_CLIENT_SECRET:  ${{ secrets.YT_OAUTH_CLIENT_SECRET }}
+      YT_OAUTH_REFRESH_TOKEN:  ${{ secrets.YT_OAUTH_REFRESH_TOKEN }}
+
+      # -----------------------------------------------------------------------
+      # RUNTIME CONFIGURATION
+      # -----------------------------------------------------------------------
+      DRY_RUN:         ${{ github.event.inputs.dry_run       || 'false' }}
+      SCORE_THRESHOLD: ${{ github.event.inputs.score_threshold || '65'   }}
+      MAX_VIDEOS:      ${{ github.event.inputs.max_videos    || '5'     }}
+      REGION_CODE:     ${{ github.event.inputs.region_code   || 'US'    }}
+      GEMINI_MODEL:    gemini-1.5-flash
+      NODE_ENV:        production
+
+    steps:
+      # -----------------------------------------------------------------------
+      # Step 1: Checkout repository
+      # -----------------------------------------------------------------------
+      - name: "Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # Step 2: Setup Node.js 20 LTS
+      # -----------------------------------------------------------------------
+      - name: "Setup Node.js 20 LTS"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ".github/scripts/package.json"
+
+      # -----------------------------------------------------------------------
+      # Step 3: Install Node.js dependencies
+      # -----------------------------------------------------------------------
+      - name: "Install Dependencies"
+        working-directory: .github/scripts
+        run: |
+          npm ci --prefer-offline --no-audit --no-fund
+
+      # -----------------------------------------------------------------------
+      # Step 4: Validate required secrets exist
+      # -----------------------------------------------------------------------
+      - name: "Validate Secrets"
+        shell: bash
+        run: |
+          echo "::group::Secret Validation"
+          MISSING=""
+          [ -z "$GEMINI_API_KEY" ]         && MISSING="$MISSING GEMINI_API_KEY"
+          [ -z "$YT_API_KEY" ]             && MISSING="$MISSING YT_API_KEY"
+          [ -z "$YT_OAUTH_CLIENT_ID" ]     && MISSING="$MISSING YT_OAUTH_CLIENT_ID"
+          [ -z "$YT_OAUTH_CLIENT_SECRET" ] && MISSING="$MISSING YT_OAUTH_CLIENT_SECRET"
+          [ -z "$YT_OAUTH_REFRESH_TOKEN" ] && MISSING="$MISSING YT_OAUTH_REFRESH_TOKEN"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required secrets:$MISSING"
+            echo "::notice::Add these secrets in GitHub Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          echo "All required secrets are present."
+          echo "DRY_RUN=$DRY_RUN"
+          echo "SCORE_THRESHOLD=$SCORE_THRESHOLD"
+          echo "MAX_VIDEOS=$MAX_VIDEOS"
+          echo "REGION_CODE=$REGION_CODE"
+          echo "::endgroup::"
+
+      # -----------------------------------------------------------------------
+      # Step 5: Run the Auto-Pilot SEO optimization script
+      # -----------------------------------------------------------------------
+      - name: "Run Auto-Pilot SEO Optimization"
+        id: auto_seo
+        working-directory: .github/scripts
+        run: |
+          node auto-seo.js 2>&1 | tee ../../run-output.txt
+          echo "EXIT_CODE=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
+        env:
+          GEMINI_API_KEY:         ${{ env.GEMINI_API_KEY }}
+          YT_API_KEY:             ${{ env.YT_API_KEY }}
+          YT_OAUTH_CLIENT_ID:     ${{ env.YT_OAUTH_CLIENT_ID }}
+          YT_OAUTH_CLIENT_SECRET: ${{ env.YT_OAUTH_CLIENT_SECRET }}
+          YT_OAUTH_REFRESH_TOKEN: ${{ env.YT_OAUTH_REFRESH_TOKEN }}
+          DRY_RUN:                ${{ env.DRY_RUN }}
+          SCORE_THRESHOLD:        ${{ env.SCORE_THRESHOLD }}
+          MAX_VIDEOS:             ${{ env.MAX_VIDEOS }}
+          REGION_CODE:            ${{ env.REGION_CODE }}
+          GEMINI_MODEL:           ${{ env.GEMINI_MODEL }}
+
+      # -----------------------------------------------------------------------
+      # Step 6: Commit run report to repository
+      # -----------------------------------------------------------------------
+      - name: "Commit Run Report"
+        if: always()
+        shell: bash
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "github-actions[bot]"
+
+          REPORT_DIR=".github/seo-reports"
+          mkdir -p "$REPORT_DIR"
+
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          REPORT_FILE="$REPORT_DIR/run-${TIMESTAMP}.json"
+
+          # Build JSON report from the output file
+          node -e "
+            const fs  = require('fs');
+            const out = fs.existsSync('../../run-output.txt') ? fs.readFileSync('../../run-output.txt', 'utf8') : '';
+            let reportData = {};
+            try {
+              const match = out.match(/SEO_REPORT_JSON:(.+)/);
+              if (match) reportData = JSON.parse(match[1]);
+            } catch(e) {}
+            const report = {
+              timestamp: new Date().toISOString(),
+              trigger: process.env.GITHUB_EVENT_NAME || 'unknown',
+              dryRun: process.env.DRY_RUN === 'true',
+              scoreThreshold: parseInt(process.env.SCORE_THRESHOLD || '65'),
+              maxVideos: parseInt(process.env.MAX_VIDEOS || '5'),
+              regionCode: process.env.REGION_CODE || 'US',
+              ...reportData
+            };
+            fs.writeFileSync('../../$REPORT_FILE', JSON.stringify(report, null, 2));
+            console.log('Report written to $REPORT_FILE');
+          " 2>/dev/null || echo '{"error":"Failed to parse report"}' > "$REPORT_FILE"
+
+          # Keep only last 30 reports
+          ls -t "$REPORT_DIR"/*.json | tail -n +31 | xargs rm -f 2>/dev/null || true
+
+          # Stage, commit and push
+          git add "$REPORT_DIR/" run-output.txt 2>/dev/null || true
+          git add -f run-output.txt 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore(seo): auto-pilot run ${TIMESTAMP} [skip ci]"
+            git push origin HEAD:${{ github.ref_name }} --force-with-lease || {
+              git pull --rebase origin ${{ github.ref_name }}
+              git push origin HEAD:${{ github.ref_name }}
+            }
+          fi
+
+      # -----------------------------------------------------------------------
+      # Step 7: Upload run output as artifact
+      # -----------------------------------------------------------------------
+      - name: "Upload Run Artifact"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: seo-run-output-${{ github.run_number }}
+          path: run-output.txt
+          retention-days: 30
+
+      # -----------------------------------------------------------------------
+      # Step 8: Create GitHub Issue on failure
+      # -----------------------------------------------------------------------
+      - name: "Notify Failure via Issue"
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `[Auto-SEO] Run failed on ${new Date().toISOString().split('T')[0]}`,
+              body: [
+                "## Auto-Pilot SEO Run Failed",
+                "",
+                `**Run:** [#${context.runId}](${runUrl})`,
+                `**Trigger:** ${context.eventName}`,
+                `**Time:** ${new Date().toISOString()}`,
+                "",
+                "### Common Causes",
+                "- `YT_OAUTH_REFRESH_TOKEN` has expired (re-generate from OAuth playground)",
+                "- `GEMINI_API_KEY` quota exceeded or invalid",
+                "- YouTube API quota limit reached",
+                "",
+                "Please check the [run logs]('" + runUrl + "') for details."
+              ].join("\n"),
+              labels: ["auto-seo", "bug"]
+            });
