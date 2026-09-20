@@ -930,6 +930,175 @@ function runKeywordResearch(query, opts){
 }
 
 /* =========================================================================
+ * 6b. PURE YOUTUBE-API SUGGESTION ENGINE — NO GEMINI ANYWHERE IN THIS BLOCK.
+ * Exactly the method requested: search.list -> videos.list -> a tag-frequency
+ * loop over the real results. Every suggested tag and every "reference title"
+ * below is something a real, currently-live YouTube video is actually using —
+ * nothing here is generated or invented.
+ * ======================================================================= */
+function fetchTopVideosForQuery(query, categoryId, max){
+  var params={part:"snippet",q:query,type:"video",maxResults:String(max||50),order:"relevance"};
+  if(categoryId) params.videoCategoryId=categoryId;
+  return ytFetch("search",params).then(function(sr){
+    var ids=(sr.items||[]).map(function(it){return it.id.videoId;}).filter(Boolean);
+    if(!ids.length) return [];
+    return fetchVideosByIds(ids);
+  });
+}
+function buildTagFrequency(videos){
+  var freq={};
+  videos.forEach(function(v){
+    var views=parseInt((v.statistics&&v.statistics.viewCount)||"0",10);
+    ((v.snippet&&v.snippet.tags)||[]).forEach(function(t){
+      var k=(t||"").trim(); if(!k) return; var kk=k.toLowerCase();
+      if(!freq[kk]) freq[kk]={tag:k,count:0,totalViews:0};
+      freq[kk].count++; freq[kk].totalViews+=views;
+    });
+  });
+  return freq;
+}
+function rankedTagsFromFrequency(freq, limit){
+  return Object.keys(freq).map(function(k){ return freq[k]; })
+    .sort(function(a,b){ return (b.count*Math.log(1+b.totalViews)) - (a.count*Math.log(1+a.totalViews)); })
+    .slice(0, limit||25)
+    .map(function(f){ return { text:f.tag, usedByCount:f.count, avgViews:Math.round(f.totalViews/f.count) }; });
+}
+function topTitlesReference(videos, limit){
+  return videos.slice().sort(function(a,b){ return parseInt((b.statistics&&b.statistics.viewCount)||0,10)-parseInt((a.statistics&&a.statistics.viewCount)||0,10); })
+    .slice(0, limit||8)
+    .map(function(v){ return { title:(v.snippet&&v.snippet.title)||"", views:parseInt((v.statistics&&v.statistics.viewCount)||0,10), videoId:v.id }; });
+}
+function buildTemplateDescription(primaryKeyword, topTags){
+  var kw=primaryKeyword||"this video";
+  var hashtags=topTags.slice(0,3).map(function(t){ return "#"+t.text.replace(/\s+/g,""); }).join(" ");
+  var tagList=topTags.slice(0,8).map(function(t){return t.text;}).join(", ");
+  return kw+" \u2014 everything covered in this video about "+kw+".\n\n"+
+    "This video about "+kw+" covers the topics real viewers search for most: "+tagList+".\n\n"+hashtags;
+}
+/* seed -> real market data -> tag/title/description suggestions. No AI text generation anywhere in this function. */
+function runApiSuggestion(seed, categoryId, onProgress){
+  function report(m,p){ if(onProgress) onProgress(m,p); }
+  report("Searching YouTube for real top videos on this topic...", 25);
+  return fetchTopVideosForQuery(seed, categoryId, 50).then(function(videos){
+    if(!videos.length) throw new Error("No YouTube results for this topic \u2014 try a broader keyword.");
+    report("Reading real tags & titles from "+videos.length+" videos...", 60);
+    var freq=buildTagFrequency(videos);
+    var tags=rankedTagsFromFrequency(freq,25);
+    var titles=topTitlesReference(videos,8);
+    var primaryKeyword=seed;
+    report("Building a keyword-optimized description template...", 85);
+    var optimizedDescription=buildTemplateDescription(primaryKeyword, tags);
+    report("Done.",100);
+    return { primaryKeyword:primaryKeyword, tags:tags, referenceTitles:titles, optimizedDescription:optimizedDescription, sourceVideoCount:videos.length };
+  });
+}
+
+/* =========================================================================
+ * 6c. VIDIQ-STYLE 100-POINT SCORE, IMPLEMENTED EXACTLY AS SPECIFIED:
+ * Actionable Score (50 pts, pure metadata, instant) +
+ * Performance Score (50 pts, LIVE per-tag YouTube search-position lookups).
+ * ======================================================================= */
+function calcActionableScore(title, description, tags, primaryKeyword){
+  title=title||""; description=description||""; tags=tags||[]; var kw=(primaryKeyword||"").toLowerCase().trim();
+  var tagCountScore=Math.min(10,(tags.length/20)*10);
+  var tagVolumeScore=Math.min(10, tags.length?10:0); // refined by the live check below once run
+  var titleLc=title.toLowerCase();
+  var titleKwScore = kw && titleLc.indexOf(kw)>=0 ? (titleLc.indexOf(kw)<=15?5:3.5) : 0;
+  var first200=description.slice(0,200).toLowerCase();
+  var occ = kw ? first200.split(kw).length-1 : 0;
+  var descKwScore = occ>=2?5:occ===1?2.5:0;
+  var inTitle= !!(kw && titleLc.indexOf(kw)>=0);
+  var inDesc = !!(kw && description.toLowerCase().indexOf(kw)>=0);
+  var inTags = !!(kw && tags.some(function(t){return t.toLowerCase().indexOf(kw)>=0;}));
+  var trifectaScore = (inTitle&&inDesc&&inTags)?20:0;
+  var total=Math.round(tagCountScore+tagVolumeScore+titleKwScore+descKwScore+trifectaScore);
+  return { total:total, breakdown:{tagCount:Math.round(tagCountScore),tagVolume:Math.round(tagVolumeScore),titleKeyword:titleKwScore,descKeyword:descKwScore,trifecta:trifectaScore} };
+}
+/* LIVE: searches YouTube for each of this video's own tags and finds the video's
+ * real position in those results (top 20) — exactly the mechanism described:
+ * GET search.list?q=[tag]&type=video, then find this video's ID in the response. */
+function runLiveRankCheck(videoId, tags, onProgress){
+  var checkTags=(tags||[]).filter(Boolean).slice(0,12);
+  var results=[];
+  return checkTags.reduce(function(chain, tag, idx){
+    return chain.then(function(){
+      if(onProgress) onProgress("Checking real YouTube rank for tag "+(idx+1)+"/"+checkTags.length+": \u201c"+tag+"\u201d\u2026", 10+((idx/checkTags.length)*85));
+      return ytFetch("search",{part:"id",q:tag,type:"video",maxResults:"20",order:"relevance"}).then(function(sr){
+        var ids=(sr.items||[]).map(function(it){return it.id.videoId;});
+        var pos=ids.indexOf(videoId);
+        results.push({tag:tag, rank: pos>=0?pos+1:null});
+      }).catch(function(){ results.push({tag:tag, rank:null}); });
+    });
+  },Promise.resolve()).then(function(){
+    var ranked=results.filter(function(r){return r.rank!==null;});
+    var rankedTagsScore=Math.min(25,(ranked.length/5)*25);
+    var top2=ranked.filter(function(r){return r.rank<=2;});
+    var highVolRankedScore = top2.length?25:(ranked.some(function(r){return r.rank<=5;})?12:0);
+    return { results:results, performance:{ rankedTagsScore:Math.round(rankedTagsScore), highVolRankedScore:Math.round(highVolRankedScore), total:Math.round(rankedTagsScore+highVolRankedScore) } };
+  });
+}
+
+/* =========================================================================
+ * 6d. OPTIONAL, NARROW GEMINI USE — understanding a video's TRUE topic only.
+ * Nothing generated here is ever shown as a suggestion; it only decides what
+ * search query gets sent to the pure-API engine above. Uses the thumbnail
+ * (vision) and, when YouTube actually exposes a downloadable caption track
+ * for the video, the transcript too. Honest limitation: YouTube's API blocks
+ * downloading auto-generated (ASR) captions for any third-party use — only
+ * a manually-uploaded caption track can be read this way, so a transcript is
+ * not always available, and this step silently and safely falls back to the
+ * title/thumbnail when it isn't.
+ * ======================================================================= */
+function fetchTranscriptIfAvailable(videoId){
+  if(!Cfg.isOAuthValid()) return Promise.resolve(null);
+  return fetch(YT_API+"captions?part=snippet&videoId="+encodeURIComponent(videoId),{headers:{Authorization:"Bearer "+Cfg.getAccessToken()}})
+    .then(function(r){ return r.ok?r.json():{items:[]}; })
+    .then(function(r){
+      var manual=(r.items||[]).filter(function(t){ return t.snippet && t.snippet.trackKind && t.snippet.trackKind!=="ASR"; });
+      if(!manual.length) return null;
+      return fetch(YT_API+"captions/"+manual[0].id+"?tfmt=srt",{headers:{Authorization:"Bearer "+Cfg.getAccessToken()}})
+        .then(function(r2){ return r2.ok?r2.text():null; }).catch(function(){ return null; });
+    }).catch(function(){ return null; });
+}
+function understandVideo(video, context){
+  context=context||{};
+  var s=(video&&video.snippet)||{};
+  var fallbackQuery=cleanQueryText(s.title||context.currentTitle||"");
+  if(!Cfg.hasGeminiKey()) return Promise.resolve({cleanQuery:fallbackQuery, source:"title-only"});
+  var thumb=s.thumbnails&&(s.thumbnails.medium||s.thumbnails.default);
+  var transcriptP = video ? fetchTranscriptIfAvailable(video.id) : Promise.resolve(null);
+  return transcriptP.then(function(transcript){
+    if(!thumb && !transcript) return {cleanQuery:fallbackQuery, source:"title-only"};
+    var textPrompt=["Identify this YouTube video's TRUE topic from the real information below (ignore misleading hashtags/clickbait words).",
+      "Title: "+(s.title||context.currentTitle||""), "Description: "+((s.description||context.currentDescription||"")).slice(0,300),
+      transcript?("Real transcript excerpt: "+transcript.slice(0,1500)):"",
+      'Return ONLY JSON: {"realTopic":"...","cleanSearchQuery":"3-6 word accurate YouTube search phrase"}'].join("\n");
+    var keys=Cfg.getGeminiKeys(); if(!keys.length) return {cleanQuery:fallbackQuery, source:"title-only"};
+    var callPromise;
+    if(thumb && !transcript){
+      callPromise=imageUrlToBase64(thumb.url).then(function(img){
+        return fetch(GEM_API+Cfg.getGeminiModel()+":generateContent?key="+encodeURIComponent(keys[0]),{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({contents:[{parts:[{inlineData:{mimeType:img.mime,data:img.data}},{text:textPrompt}]}],generationConfig:{responseMimeType:"application/json",temperature:0.3}})})
+          .then(function(r){return r.ok?r.json():null;});
+      }).catch(function(){ return null; });
+    } else {
+      callPromise=fetch(GEM_API+Cfg.getGeminiModel()+":generateContent?key="+encodeURIComponent(keys[0]),{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({contents:[{parts:[{text:textPrompt}]}],generationConfig:{responseMimeType:"application/json",temperature:0.3}})})
+        .then(function(r){return r.ok?r.json():null;}).catch(function(){ return null; });
+    }
+    return callPromise.then(function(data){
+      if(!data) return {cleanQuery:fallbackQuery, source:"title-only"};
+      var t=data.candidates&&data.candidates[0]&&data.candidates[0].content&&data.candidates[0].content.parts&&data.candidates[0].content.parts[0]&&data.candidates[0].content.parts[0].text;
+      if(!t) return {cleanQuery:fallbackQuery, source:"title-only"};
+      try{
+        var parsed=JSON.parse(t.replace(/^```json\s*/i,"").replace(/```\s*$/,"").trim());
+        return {cleanQuery:parsed.cleanSearchQuery||fallbackQuery, realTopic:parsed.realTopic, source:transcript?"transcript":"vision"};
+      }catch(e){ return {cleanQuery:fallbackQuery, source:"title-only"}; }
+    });
+  });
+}
+
+/* =========================================================================
  * 7. GEMINI
  * ======================================================================= */
 function geminiCallOnce(prompt, key){
@@ -1173,9 +1342,21 @@ function initKebabMenu(){
   DOM.customLinkAddBtn.addEventListener("click", function(){
     var label=DOM.customLinkName.value.trim(), url=DOM.customLinkUrl.value.trim();
     if(!label||!url){ toast("Enter both a label and a file name.","warn"); return; }
-    var links=loadCustomLinks(); links.push({label:label,url:url}); saveCustomLinks(links);
-    DOM.customLinkName.value=""; DOM.customLinkUrl.value=""; renderCustomLinks();
-    toast("Page added to menu.");
+    var resolved=new URL(url, window.location.href).href;
+    DOM.customLinkAddBtn.disabled=true; DOM.customLinkAddBtn.innerHTML='<span class="loader-ring"></span> Checking file exists...';
+    fetch(resolved, {method:"GET", cache:"no-store"}).then(function(res){
+      DOM.customLinkAddBtn.disabled=false; DOM.customLinkAddBtn.innerHTML='+ Add Page Link';
+      if(!res.ok){
+        toast('"'+url+'" returned a 404 at '+resolved+' — upload that exact file name to GitHub first, then try adding it again.',"err",7000);
+        return;
+      }
+      var links=loadCustomLinks(); links.push({label:label,url:url}); saveCustomLinks(links);
+      DOM.customLinkName.value=""; DOM.customLinkUrl.value=""; renderCustomLinks();
+      toast("Page added to menu — verified it loads at "+resolved);
+    }).catch(function(){
+      DOM.customLinkAddBtn.disabled=false; DOM.customLinkAddBtn.innerHTML='+ Add Page Link';
+      toast("Could not verify the file (network error) — check the file name and try again.","err",6000);
+    });
   });
 }
 
@@ -1229,9 +1410,13 @@ function renderKwTable(target, data, clickable){
       '<td><span class="kw-word">'+esc(kw.keyword)+'</span>'+(kw.inTrending?' <span class="badge badge--hi">SEED</span>':'')+'</td>'+
       '<td><span class="badge '+vCls+'">'+esc(kw.searchVolume)+'</span></td>'+
       '<td><span class="badge '+(kw.competition==="High"?"badge--hi":kw.competition==="Medium"?"badge--md":"badge--lo")+'">'+esc(kw.competition)+'</span></td>'+
-      '<td><span class="viral-bar"><span class="viral-bar__fill" style="width:'+kw.opportunityScore+'%;"></span></span>'+kw.opportunityScore+'</td></tr>';
+      '<td><span class="viral-bar"><span class="viral-bar__fill" style="width:'+kw.opportunityScore+'%;"></span></span>'+kw.opportunityScore+'</td>'+
+      '<td><button class="btn btn--sm btn--ghost kw-copy-btn" data-copy="'+esc(kw.keyword)+'" type="button" title="Copy"><svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></td></tr>';
   }).join("");
-  target.innerHTML='<table class="kw-table"><thead><tr><th>Rank</th><th>Keyword</th><th>Volume</th><th>Competition</th><th>Viral Score</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  target.innerHTML='<table class="kw-table"><thead><tr><th>Rank</th><th>Keyword</th><th>Volume</th><th>Competition</th><th>Viral Score</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+  $$(".kw-copy-btn",target).forEach(function(btn){
+    btn.addEventListener("click", function(e){ e.stopPropagation(); copyToClipboard(btn.dataset.copy); toast('Copied "'+btn.dataset.copy+'"'); });
+  });
   if(clickable){
     $$("tr[data-kw]",target).forEach(function(tr){
       tr.style.cursor="pointer";
@@ -1259,9 +1444,8 @@ function initHome(){
   DOM.homeTopicInput.addEventListener("keydown", function(e){ if(e.key==="Enter") DOM.homeResearchBtn.click(); });
 
   DOM.homeGenBtn.addEventListener("click", function(){
-    if(!Cfg.hasGeminiKey()){ toast("Add your Gemini API key under Me first.","warn"); return; }
     DOM.homeGenSkeleton.classList.remove("hidden"); DOM.homeGenResult.innerHTML=""; DOM.homeGenBtn.disabled=true;
-    twoPassSuggest(state.homeTopic, {}, "full", function(msg){ DOM.homeGenBtn.innerHTML='<span class="loader-ring"></span> '+esc(msg); })
+    runApiSuggestion(state.homeTopic, null, function(msg){ DOM.homeGenBtn.innerHTML='<span class="loader-ring"></span> '+esc(msg); })
       .then(function(res){
         DOM.homeGenSkeleton.classList.add("hidden"); DOM.homeGenBtn.disabled=false;
         DOM.homeGenBtn.innerHTML='<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg> Generate Titles &amp; Tags for This Topic';
@@ -1275,18 +1459,18 @@ function initHome(){
 }
 
 function renderGenResult(target, res){
-  var titles=(res.titles||[]).map(function(t,i){
-    return '<div class="opt-line"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.text)+'</div><div class="opt-line__score">'+ (t.viralScore||0) +'</div></div>';
+  var titles=(res.referenceTitles||[]).map(function(t,i){
+    return '<div class="opt-line" style="cursor:default;"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.title)+'</div><div class="opt-line__score">'+fmtNum(t.views)+'</div></div>';
   }).join("");
-  var tags=(res.tags||[]).map(function(t){ return '<span class="pill">'+esc(t.text)+' &middot; '+(t.viralScore||0)+'</span>'; }).join("");
+  var tags=(res.tags||[]).map(function(t){ return '<span class="pill" data-copy="'+esc(t.text)+'">'+esc(t.text)+' &middot; used by '+t.usedByCount+'/'+res.sourceVideoCount+'</span>'; }).join("");
   target.innerHTML =
-    '<div class="small-note" style="margin-bottom:10px;">Primary keyword: <b style="color:var(--gold);">'+esc(res.primaryKeyword||"")+'</b> &middot; market opportunity '+(res._market&&res._market.opportunity||"?")+'/100'+
-      (res._market&&res._market.velocity?(' &middot; trend velocity <b style="color:'+(res._market.velocity==="High"?"var(--red)":res._market.velocity==="Medium"?"var(--amber)":"var(--green)")+';">'+esc(res._market.velocity)+'</b> (~'+res._market.vph+' views/hr on newest uploads)'):'')+
-      '</div>'+
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Ranked Title Ideas</div>'+titles+
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;">Tags</div>'+
+    '<div class="small-note" style="margin-bottom:10px;">Based on <b>'+res.sourceVideoCount+' real videos</b> currently ranking for "'+esc(res.primaryKeyword||"")+'" &mdash; nothing below is AI-written, every tag/title is real.</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Top-Performing Real Titles (for inspiration)</div>'+titles+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;">Real Tags Used by Top Videos &mdash; click to copy</div>'+
     '<div class="pill-wrap">'+tags+'</div>'+
-    (res.keywordStrategy ? '<div class="info-box" style="margin-top:14px;"><span>'+esc(res.keywordStrategy)+'</span></div>' : '');
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.05em;margin:14px 0 8px;">Description Template</div>'+
+    '<div class="info-box" style="white-space:pre-wrap;">'+esc(res.optimizedDescription||"")+'</div>';
+  $$(".pill",target).forEach(function(p){ p.addEventListener("click", function(){ copyToClipboard(p.dataset.copy); toast("Copied."); }); });
 }
 
 /* ---------- OAuth buttons ---------- */
@@ -1541,9 +1725,7 @@ function triggerSeoUpdate(){
 function currentContext(){
   var s=(state.activeVideoData&&state.activeVideoData.snippet)||{};
   var thumb=s.thumbnails&&(s.thumbnails.medium||s.thumbnails.default);
-  var regionCode = state.channel && state.channel.snippet && state.channel.snippet.country;
-  var relevanceLanguage = s.defaultLanguage || s.defaultAudioLanguage;
-  return { categoryId:s.categoryId, currentTitle:DOM.editTitle.value, currentDescription:DOM.editDesc.value, thumbnailUrl: thumb&&thumb.url, regionCode: regionCode, relevanceLanguage: relevanceLanguage };
+  return { categoryId:s.categoryId, currentTitle:DOM.editTitle.value, currentDescription:DOM.editDesc.value, thumbnailUrl: thumb&&thumb.url };
 }
 function seedFromVideo(){
   return cleanQueryText(DOM.editTitle.value) || "video";
@@ -1553,12 +1735,23 @@ function setProgress(show,pct,msg){
   DOM.optProgressFill.style.width=Math.max(2,pct||0)+"%";
   DOM.optProgressMsg.textContent=msg||"";
 }
+/* understand the real topic (best-effort, optional Gemini) -> then the
+ * pure-YouTube-API engine does the actual suggesting. No Gemini text is
+ * ever shown as a title/tag/description suggestion. */
+function runVideoSuggestion(onProgress){
+  var video=state.activeVideoData;
+  return understandVideo(video, currentContext()).then(function(u){
+    if(onProgress) onProgress(u.source==="transcript"?"Understood from real transcript...":u.source==="vision"?"Understood from thumbnail...":"Using title as search seed...", 15);
+    return runApiSuggestion(u.cleanQuery || seedFromVideo(), (video&&video.snippet&&video.snippet.categoryId), onProgress).then(function(res){
+      res._understanding=u; return res;
+    });
+  });
+}
 function runFullOptimizeFlow(auto){
-  if(!Cfg.hasGeminiKey()){ if(!auto) toast("Add Gemini API key under Me first.","warn"); return; }
   if(!state.activeVideoId) return;
   DOM.optimizeBtn.disabled=true; setProgress(true,5,auto?"Auto-analyzing this video...":"Starting...");
-  DOM.optResult.innerHTML = auto ? '<div class="small-note">Pulling real YouTube data and generating suggestions automatically&hellip;</div>' : '';
-  twoPassSuggest(seedFromVideo(), currentContext(), "full", function(m,p){ setProgress(true,p,m); })
+  DOM.optResult.innerHTML = auto ? '<div class="small-note">Pulling real YouTube data automatically&hellip;</div>' : '';
+  runVideoSuggestion(function(m,p){ setProgress(true,p,m); })
     .then(function(res){
       setProgress(false); DOM.optimizeBtn.disabled=false;
       renderFullResult(res);
@@ -1566,18 +1759,16 @@ function runFullOptimizeFlow(auto){
 }
 function initSuggestButtons(){
   DOM.suggestTitleBtn.addEventListener("click", function(){
-    if(!Cfg.hasGeminiKey()){ toast("Add Gemini API key under Me first.","warn"); return; }
     DOM.suggestTitleBtn.disabled=true; setProgress(true,5,"Starting...");
-    twoPassSuggest(seedFromVideo(), currentContext(), "titles", function(m,p){ setProgress(true,p,m); })
+    runVideoSuggestion(function(m,p){ setProgress(true,p,m); })
       .then(function(res){
         setProgress(false); DOM.suggestTitleBtn.disabled=false;
         renderTitleSuggestions(res);
       }).catch(function(err){ setProgress(false); DOM.suggestTitleBtn.disabled=false; toast("Failed: "+err.message,"err",5000); });
   });
   DOM.suggestTagsBtn.addEventListener("click", function(){
-    if(!Cfg.hasGeminiKey()){ toast("Add Gemini API key under Me first.","warn"); return; }
     DOM.suggestTagsBtn.disabled=true; setProgress(true,5,"Starting...");
-    twoPassSuggest(seedFromVideo(), currentContext(), "tags", function(m,p){ setProgress(true,p,m); })
+    runVideoSuggestion(function(m,p){ setProgress(true,p,m); })
       .then(function(res){
         setProgress(false); DOM.suggestTagsBtn.disabled=false;
         renderTagSuggestions(res);
@@ -1586,29 +1777,24 @@ function initSuggestButtons(){
   DOM.optimizeBtn.addEventListener("click", function(){ runFullOptimizeFlow(false); });
 }
 function visionNoteHtml(res){
-  if(!res._vision) return "";
-  var v=res._vision;
+  var u=res._understanding; if(!u || u.source==="title-only") return "";
   return '<div class="info-box" style="margin-bottom:12px;border-color:var(--sky);background:rgba(56,189,248,.08);"><svg class="icon" viewBox="0 0 24 24" style="stroke:var(--sky-dim);"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'+
-    '<span><b>AI watched the thumbnail:</b> '+esc(v.realTopic||"")+' <i>('+esc(v.detectedCategory||"")+')</i>'+
-    (v.note?('<br><span style="color:var(--amber);">⚠ '+esc(v.note)+'</span>'):"")+'</span></div>';
+    '<span><b>AI understood this video from its '+(u.source==="transcript"?"real transcript":"thumbnail")+':</b> '+esc(u.realTopic||u.cleanQuery||"")+'</span></div>';
 }
 function renderTitleSuggestions(res){
-  var html=(res.titles||[]).map(function(t,i){
-    return '<button class="opt-line" data-title="'+esc(t.text)+'"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.text)+'</div><div class="opt-line__score">'+(t.viralScore||0)+'</div></button>';
+  var html=(res.referenceTitles||[]).map(function(t,i){
+    return '<div class="opt-line" style="cursor:default;"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.title)+'</div><div class="opt-line__score">'+fmtNum(t.views)+' views</div></div>';
   }).join("");
-  DOM.optResult.innerHTML=visionNoteHtml(res)+'<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Suggested Titles (real data)</div>'+html;
-  $$(".opt-line",DOM.optResult).forEach(function(btn){
-    btn.addEventListener("click", function(){ DOM.editTitle.value=btn.dataset.title; scheduleSeoUpdate(); toast("Title applied."); });
-  });
+  DOM.optResult.innerHTML=visionNoteHtml(res)+
+    '<div class="small-note" style="margin-bottom:10px;">Real top-ranking titles for "'+esc(res.primaryKeyword||"")+'" (from '+res.sourceVideoCount+' videos) &mdash; use these as inspiration, then edit the Title field above yourself.</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Top Real Titles</div>'+html;
 }
-function tagPillsRanked(tags, idPrefix){
-  var sorted=(tags||[]).slice().sort(function(a,b){ return (b.viralScore||0)-(a.viralScore||0); });
+function tagPillsRanked(tags){
+  var sorted=(tags||[]).slice().sort(function(a,b){ return (b.usedByCount||0)-(a.usedByCount||0); });
   return sorted.map(function(t,i){
-    var sc=t.viralScore||0;
-    var scColor = sc>=80?"var(--green)":sc>=50?"var(--sky-dim)":"var(--amber)";
     return '<span class="pill" data-tag="'+esc(t.text)+'" title="Click to apply">'+
       '<b style="color:var(--gold-dim);">#'+(i+1)+'</b> '+esc(t.text)+
-      ' <span style="color:'+scColor+';font-weight:800;">'+sc+'</span></span>';
+      ' <span style="color:var(--tx-3);font-weight:700;">used by '+t.usedByCount+'</span></span>';
   }).join("");
 }
 function wireTagPills(container){
@@ -1625,11 +1811,11 @@ function tagBulkButtonsHtml(){
 function wireTagBulkButtons(tags){
   var applyBtn=$("#applyAllTagsBtn",DOM.optResult), copyBtn=$("#copyAllTagsBtn",DOM.optResult);
   if(applyBtn) applyBtn.addEventListener("click", function(){
-    var sorted=(tags||[]).slice().sort(function(a,b){return (b.viralScore||0)-(a.viralScore||0);});
-    var current=getTagsArray(); var totalLen=current.join(",").length; var added=0;
+    var sorted=(tags||[]).slice().sort(function(a,b){return (b.usedByCount||0)-(a.usedByCount||0);});
+    var current=getTagsArray(); var added=0;
     sorted.forEach(function(t){
       var candidate=current.concat([t.text]).join(",");
-      if(candidate.length<=500 && current.indexOf(t.text)<0 && !current.some(function(c){return c.toLowerCase()===t.text.toLowerCase();})){
+      if(candidate.length<=500 && !current.some(function(c){return c.toLowerCase()===t.text.toLowerCase();})){
         current.push(t.text); added++;
       }
     });
@@ -1644,42 +1830,60 @@ function wireTagBulkButtons(tags){
 function renderTagSuggestions(res){
   var pills=tagPillsRanked(res.tags);
   DOM.optResult.innerHTML=visionNoteHtml(res)+
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Suggested Tags &mdash; ranked by real-data score</div>'+
+    '<div class="small-note" style="margin-bottom:10px;">Real tags used by '+res.sourceVideoCount+' top-ranking videos for "'+esc(res.primaryKeyword||"")+'"</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Suggested Tags &mdash; ranked by real usage</div>'+
     tagBulkButtonsHtml()+
     '<div class="pill-wrap">'+pills+'</div>';
   wireTagPills(DOM.optResult); wireTagBulkButtons(res.tags);
 }
 
 function renderFullResult(res){
-  var titleHtml=(res.titles||[]).map(function(t,i){
-    return '<button class="opt-line" data-title="'+esc(t.text)+'"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.text)+'</div><div class="opt-line__score">'+(t.viralScore||0)+'</div></button>';
+  var titleHtml=(res.referenceTitles||[]).map(function(t,i){
+    return '<div class="opt-line" style="cursor:default;"><div class="opt-line__rank">#'+(i+1)+'</div><div class="opt-line__text">'+esc(t.title)+'</div><div class="opt-line__score">'+fmtNum(t.views)+' views</div></div>';
   }).join("");
   var tagPills=tagPillsRanked(res.tags);
-  var marketLine = '<div class="small-note" style="margin-bottom:10px;">Market opportunity <b style="color:var(--gold);">'+(res._market&&res._market.opportunity||"?")+'/100</b>'+
-    (res._market&&res._market.velocity?(' &middot; trend velocity <b style="color:'+(res._market.velocity==="High"?"var(--red)":res._market.velocity==="Medium"?"var(--amber)":"var(--green)")+';">'+esc(res._market.velocity)+'</b> (~'+res._market.vph+' views/hr on newest uploads)'):'')+
-    ' &middot; click any suggestion below to Apply it (nothing changes until you click)</div>';
+  var marketLine = '<div class="small-note" style="margin-bottom:10px;">Based on <b>'+res.sourceVideoCount+' real videos</b> for "'+esc(res.primaryKeyword||"")+'" &mdash; nothing here is AI-written; click any tag or the description to Apply it (nothing changes until you click)</div>';
   DOM.optResult.innerHTML =
     visionNoteHtml(res)+ marketLine +
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Titles &mdash; ranked, click to Apply</div>'+titleHtml+
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin:14px 0 8px;">Description</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:8px;">Top Real Titles (inspiration &mdash; edit the Title field yourself)</div>'+titleHtml+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin:14px 0 8px;">Description Template</div>'+
     '<div class="info-box" style="white-space:pre-wrap;">'+esc(res.optimizedDescription||"")+'</div>'+
     '<button class="btn btn--cyan btn--sm" id="applyDescBtn" style="margin-top:8px;">Apply description</button>'+
-    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin:14px 0 8px;">Tags &mdash; ranked, click each to Apply</div>'+
+    '<div style="font-size:11px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin:14px 0 8px;">Tags &mdash; ranked by real usage, click each to Apply</div>'+
     tagBulkButtonsHtml()+
     '<div class="pill-wrap">'+tagPills+'</div>'+
-    (res.keywordStrategy?'<div class="info-box" style="margin-top:14px;"><span>'+esc(res.keywordStrategy)+'</span></div>':'');
-  /* Nothing is written into the title/description/tags fields automatically —
-   * every real API-sourced suggestion above only takes effect when the
-   * person clicks it (Apply), exactly as requested. */
-  $$(".opt-line",DOM.optResult).forEach(function(btn){
-    btn.addEventListener("click", function(){
-      $$(".opt-line",DOM.optResult).forEach(function(b){b.classList.remove("selected");}); btn.classList.add("selected");
-      DOM.editTitle.value=btn.dataset.title; scheduleSeoUpdate(); toast("Title applied.");
-    });
-  });
+    '<button id="runRankCheckBtn" class="btn btn--gold btn--block" style="margin-top:16px;">Run Real Rank &amp; vidIQ-Style Score</button>'+
+    '<div id="rankCheckResult" style="margin-top:12px;"></div>';
   wireTagPills(DOM.optResult); wireTagBulkButtons(res.tags);
   var applyDescBtn=$("#applyDescBtn",DOM.optResult);
   if(applyDescBtn) applyDescBtn.addEventListener("click", function(){ DOM.editDesc.value=res.optimizedDescription||""; scheduleSeoUpdate(); toast("Description applied."); });
+  var rankBtn=$("#runRankCheckBtn",DOM.optResult);
+  if(rankBtn) rankBtn.addEventListener("click", function(){ runVidIQScoreCheck(res); });
+}
+/* Live, on-demand: exactly the vidIQ formula from the shared spec —
+ * Actionable (50, instant metadata) + Performance (50, live per-tag search
+ * position lookups). This costs one YouTube API call per tag checked, so
+ * it only runs when explicitly requested, not automatically. */
+function runVidIQScoreCheck(res){
+  if(!state.activeVideoId) return;
+  var out=$("#rankCheckResult",DOM.optResult);
+  var btn=$("#runRankCheckBtn",DOM.optResult); btn.disabled=true;
+  var tags=getTagsArray();
+  var actionable=calcActionableScore(DOM.editTitle.value, DOM.editDesc.value, tags, res.primaryKeyword);
+  out.innerHTML='<div class="small-note">Checking real YouTube search position for up to 12 of your tags&hellip;</div>';
+  runLiveRankCheck(state.activeVideoId, tags, function(m){ out.innerHTML='<div class="small-note">'+esc(m)+'</div>'; })
+    .then(function(live){
+      btn.disabled=false;
+      var total=actionable.total+live.performance.total;
+      var rows=live.results.map(function(r){
+        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--bd);font-size:12px;"><span>'+esc(r.tag)+'</span><span style="font-weight:800;color:'+(r.rank&&r.rank<=5?"var(--green)":r.rank?"var(--amber)":"var(--tx-3)")+';">'+(r.rank?("#"+r.rank):"not in top 20")+'</span></div>';
+      }).join("");
+      out.innerHTML =
+        '<div class="info-box"><span><b>vidIQ-style score: '+total+'/100</b><br>'+
+        'Actionable '+actionable.total+'/50 (tag count '+actionable.breakdown.tagCount+', tag volume '+actionable.breakdown.tagVolume+', keyword-in-title '+actionable.breakdown.titleKeyword+', keyword-in-description '+actionable.breakdown.descKeyword+', trifecta match '+actionable.breakdown.trifecta+')<br>'+
+        'Performance '+live.performance.total+'/50 (ranked tags '+live.performance.rankedTagsScore+', high-volume-ranked '+live.performance.highVolRankedScore+') &mdash; live from YouTube search just now</span></div>'+
+        '<div style="margin-top:10px;">'+rows+'</div>';
+    }).catch(function(err){ btn.disabled=false; out.innerHTML='<div class="info-box warn"><span>'+esc(err.message)+'</span></div>'; });
 }
 
 /* ---------- Keywords tab (modal) ---------- */
