@@ -213,6 +213,8 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
 .tag-chip-box:focus-within{border-color:var(--gold-dim);}
 .tag-chip-list{display:flex;flex-wrap:wrap;gap:6px;}
 .tag-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 11px;border-radius:20px;font-size:12px;font-weight:600;background:rgba(47,155,255,.1);border:1px solid rgba(47,155,255,.25);color:var(--tx-1);}
+.tag-chip__rank{font-family:var(--font-d);font-weight:800;font-size:11px;color:var(--gold-dim);}
+.tag-chip__rank.none{color:var(--tx-3);font-weight:600;}
 .tag-chip button{border:none;background:rgba(15,23,42,.08);color:var(--tx-2);width:17px;height:17px;border-radius:50%;cursor:pointer;display:grid;place-items:center;padding:0;flex:none;}
 .tag-chip button:hover{background:var(--red);color:#fff;}
 .tag-add-input{flex:1;min-width:120px;border:none;background:none;outline:none;font-size:13px;font-family:inherit;color:var(--tx-1);padding:4px 2px;}
@@ -261,6 +263,23 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 @media(max-width:600px){.grid2{grid-template-columns:1fr;}}
 .small-note{font-size:11px;color:var(--tx-3);margin-top:8px;line-height:1.5;}
+
+/* YT Data Chat */
+#chatFab{position:fixed;right:16px;bottom:84px;z-index:70;width:52px;height:52px;border-radius:50%;
+  background:linear-gradient(135deg,var(--sky),var(--violet));color:#fff;border:none;box-shadow:0 10px 26px var(--gold-glow);
+  display:grid;place-items:center;cursor:pointer;animation:popIn .3s var(--ease);}
+.chat-panel{position:fixed;right:14px;bottom:146px;z-index:71;width:min(360px,92vw);max-height:65vh;background:#fff;
+  border:1px solid var(--bd-strong);border-radius:20px;box-shadow:0 24px 60px rgba(15,23,42,.22);display:flex;flex-direction:column;overflow:hidden;animation:popIn .22s var(--ease);}
+.chat-panel__head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:14px 14px 10px;border-bottom:1px solid var(--bd);}
+.chat-thread{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px;background:#F7FBFF;}
+.chat-msg{max-width:92%;font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:14px;}
+.chat-msg.bot{align-self:flex-start;background:#fff;border:1px solid var(--bd);}
+.chat-msg.user{align-self:flex-end;background:linear-gradient(120deg,var(--sky),var(--violet));color:#fff;}
+.chat-msg.data{align-self:stretch;background:#fff;border:1px solid var(--bd);}
+.chat-data-row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--bd);font-size:11.5px;}
+.chat-data-row:first-child{border-top:none;}
+.chat-input-row{display:flex;gap:8px;padding:10px;border-top:1px solid var(--bd);}
+.chat-input-row .input{padding:9px 12px;font-size:12.5px;}
 
 /* Kebab / custom-pages menu */
 .kebab-menu{position:absolute;top:calc(100% + 8px);right:0;width:280px;background:#fff;border:1px solid var(--bd-strong);
@@ -437,6 +456,28 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
   </button>
 </nav>
 
+<!-- ===================== YT DATA CHAT (real YouTube API answers) ===================== -->
+<button id="chatFab" type="button" title="YT Data Chat">
+  <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+</button>
+<div id="chatPanel" class="chat-panel hidden">
+  <div class="chat-panel__head">
+    <div>
+      <div style="font-weight:800;font-size:13px;">YT Data Chat</div>
+      <div class="small-note" style="margin:0;">Gemini only decides what to ask YouTube &mdash; every number below is real, live API data</div>
+    </div>
+    <button id="chatCloseBtn" type="button" class="modal__close"><svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+  </div>
+  <div id="chatThread" class="chat-thread">
+    <div class="chat-msg bot">Ask me things like: <i>"বাংলাদেশে গত ৩ দিনে ট্রেন্ডিং কী?"</i> or <i>"gaming videos in India this week"</i> &mdash; I'll ask the real YouTube API and show you the actual results.</div>
+  </div>
+  <div class="chat-input-row">
+    <input id="chatInput" class="input" placeholder="Ask about real YouTube data..." />
+    <button id="chatSendBtn" class="btn btn--gold btn--icon" type="button"><svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></button>
+  </div>
+</div>
+
+
 <!-- ===================== EDIT MODAL ===================== -->
 <div id="modalScrim" class="scrim"></div>
 <div id="editModal" class="modal">
@@ -468,6 +509,13 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
       <div class="field">
         <label>Title <span class="char-count" id="editTitleLen">0 chars</span></label>
         <input id="editTitle" class="input" maxlength="100" />
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+          <button id="checkTitleRankBtn" class="btn btn--sm btn--cyan" type="button">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Check Real Rank on YouTube
+          </button>
+          <span id="titleRankResult" class="small-note" style="margin:0;"></span>
+        </div>
       </div>
       <div class="field">
         <label>Description <span class="char-count" id="editDescLen">0 chars</span></label>
@@ -479,6 +527,13 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
         <div class="tag-chip-box" id="tagChipBox">
           <div id="tagChips" class="tag-chip-list"></div>
           <input id="tagAddInput" class="tag-add-input" placeholder="Type a tag, press Enter" />
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+          <button id="scoreTagsBtn" class="btn btn--sm btn--cyan" type="button">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Check Real Rank for Every Tag
+          </button>
+          <span id="tagScoreStatus" class="small-note" style="margin:0;"></span>
         </div>
       </div>
       <div class="field">
@@ -1296,17 +1351,18 @@ function cacheDOM(){
    "geminiKeyInput","geminiRevealBtn","geminiSaveBtn","geminiStatus","geminiKeyList","geminiModelSelect","authCard","connectYTBtn","meConnected",
    "channelAvatar","channelName","channelSubs","channelViews","channelVidCount","refreshVideosBtn","disconnectYTBtn",
    "filterInput","sortSelect","videoGrid","modalScrim","editModal","modalClose","modalVidTitle","modalThumb",
-   "editTitle","editTitleLen","editDesc","editDescLen","editTags","editTagCount","tagChips","tagAddInput","privacySeg",
+   "editTitle","editTitleLen","checkTitleRankBtn","titleRankResult","editDesc","editDescLen","editTags","editTagCount","tagChips","tagAddInput","scoreTagsBtn","tagScoreStatus","privacySeg",
    "tabUpload","panelUpload","thumbPreview","thumbFileInput","thumbPickBtn","thumbUploadBtn","thumbStatus",
    "editCategory","editLanguage","licenseSeg","kidsSeg","embedSeg","saveUploadSettingsBtn","uploadSettingsStatus",
    "suggestTitleBtn","suggestTagsBtn","optimizeBtn","optProgressWrap","optProgressFill","optProgressMsg","optResult",
    "saveYTBtn","saveYTStatus","seoScoreNum","seoRingCircle","seoBreakdown","tabOptimize","tabKeywords","panelOptimize","panelKeywords",
    "kwInput","kwSearchBtn","kwSkeleton","kwResults","kwRelated","meDot",
-   "kebabBtn","kebabMenu","customLinkList","customLinkName","customLinkUrl","customLinkAddBtn"
+   "kebabBtn","kebabMenu","customLinkList","customLinkName","customLinkUrl","customLinkAddBtn",
+   "chatFab","chatPanel","chatCloseBtn","chatThread","chatInput","chatSendBtn"
   ].forEach(function(id){ DOM[id]=document.getElementById(id); });
 }
 
-var state={ channel:null, videos:[], activeVideoId:null, activeVideoData:null, activePrivacy:"public", homeKwData:null, seoTimer:null, categories:[], activeThumbFile:null };
+var state={ channel:null, videos:[], activeVideoId:null, activeVideoData:null, activePrivacy:"public", homeKwData:null, seoTimer:null, categories:[], activeThumbFile:null, tagRankMap:{} };
 
 /* ---------- Bottom Nav ---------- */
 function initNav(){
@@ -1343,21 +1399,94 @@ function initKebabMenu(){
     var label=DOM.customLinkName.value.trim(), url=DOM.customLinkUrl.value.trim();
     if(!label||!url){ toast("Enter both a label and a file name.","warn"); return; }
     var resolved=new URL(url, window.location.href).href;
-    DOM.customLinkAddBtn.disabled=true; DOM.customLinkAddBtn.innerHTML='<span class="loader-ring"></span> Checking file exists...';
-    fetch(resolved, {method:"GET", cache:"no-store"}).then(function(res){
-      DOM.customLinkAddBtn.disabled=false; DOM.customLinkAddBtn.innerHTML='+ Add Page Link';
-      if(!res.ok){
-        toast('"'+url+'" returned a 404 at '+resolved+' — upload that exact file name to GitHub first, then try adding it again.',"err",7000);
-        return;
-      }
+    function saveLink(warnMsg){
       var links=loadCustomLinks(); links.push({label:label,url:url}); saveCustomLinks(links);
       DOM.customLinkName.value=""; DOM.customLinkUrl.value=""; renderCustomLinks();
-      toast("Page added to menu — verified it loads at "+resolved);
-    }).catch(function(){
       DOM.customLinkAddBtn.disabled=false; DOM.customLinkAddBtn.innerHTML='+ Add Page Link';
-      toast("Could not verify the file (network error) — check the file name and try again.","err",6000);
+      if(warnMsg) toast(warnMsg,"warn",6000); else toast("Page added — verified it loads at "+resolved);
+    }
+    DOM.customLinkAddBtn.disabled=true; DOM.customLinkAddBtn.innerHTML='<span class="loader-ring"></span> Checking...';
+    var timedOut=false;
+    var timer=setTimeout(function(){ timedOut=true; saveLink('Saved, but could not confirm the file exists in time — open it from the menu to double check.'); }, 4000);
+    fetch(resolved, {method:"GET", cache:"no-store"}).then(function(res){
+      if(timedOut) return; clearTimeout(timer);
+      if(!res.ok) saveLink('Saved, but "'+url+'" returned '+res.status+' at '+resolved+' — double-check the exact file name/case was uploaded to GitHub.');
+      else saveLink(null);
+    }).catch(function(){
+      if(timedOut) return; clearTimeout(timer);
+      saveLink('Saved, but could not verify the file (network/CORS) — open it from the menu to confirm it works.');
     });
   });
+}
+
+/* =========================================================================
+ * YT DATA CHAT — Gemini ONLY converts natural language into YouTube API
+ * parameters; every fact shown in the reply comes straight from a live
+ * YouTube API call, never from Gemini's own generated text.
+ * ======================================================================= */
+function chatAppend(role, html){
+  var el=document.createElement("div"); el.className="chat-msg "+role; el.innerHTML=html;
+  DOM.chatThread.appendChild(el); DOM.chatThread.scrollTop=DOM.chatThread.scrollHeight;
+  return el;
+}
+function parseNaturalQuery(query){
+  if(!Cfg.hasGeminiKey()){
+    return Promise.resolve({intent:"search", regionCode:null, daysBack:null, keyword:query, categoryId:null});
+  }
+  var todayStr=new Date().toISOString().slice(0,10);
+  var prompt=["Convert this request about YouTube data into strict parameters. Today's date is "+todayStr+".",
+    'Request: "'+query+'"',
+    "regionCode must be a 2-letter ISO country code if a country is mentioned (e.g. Bangladesh -> BD, India -> IN), else null.",
+    "daysBack is an integer number of days if a time window is mentioned (e.g. \"3 days\"/\"এই সপ্তাহে\"->7), else null.",
+    "keyword is the topic/niche/search term if one is mentioned (e.g. \"gaming\", \"cricket\"), else null (null means: just show what's trending overall).",
+    "intent is \"trending\" if no specific keyword is given, or \"search\" if a keyword/topic is given.",
+    'Return ONLY JSON: {"intent":"trending"|"search","regionCode":"XX"|null,"daysBack":number|null,"keyword":"..."|null,"categoryId":null}'
+  ].join("\n");
+  return geminiJSON(prompt).catch(function(){ return {intent:"search", regionCode:null, daysBack:null, keyword:query, categoryId:null}; });
+}
+function fetchRealYouTubeAnswer(parsed){
+  var regionCode=parsed.regionCode||undefined;
+  if(parsed.intent==="trending" || !parsed.keyword){
+    var params={part:"snippet,statistics",chart:"mostPopular",maxResults:"15"};
+    if(regionCode) params.regionCode=regionCode;
+    return ytFetch("videos", params).then(function(r){ return r.items||[]; });
+  }
+  var sparams={part:"snippet",q:parsed.keyword,type:"video",maxResults:"15",order:"viewCount"};
+  if(regionCode) sparams.regionCode=regionCode;
+  if(parsed.daysBack){ sparams.publishedAfter=new Date(Date.now()-parsed.daysBack*86400000).toISOString(); }
+  return ytFetch("search", sparams).then(function(sr){
+    var ids=(sr.items||[]).map(function(it){return it.id.videoId;}).filter(Boolean);
+    return ids.length ? fetchVideosByIds(ids) : [];
+  });
+}
+function renderChatDataAnswer(videos, parsed){
+  if(!videos.length){
+    chatAppend("bot","No real results found for that"+(parsed.regionCode?(" in "+parsed.regionCode):"")+". Try a broader request.");
+    return;
+  }
+  var rows=videos.slice(0,12).map(function(v,i){
+    var s=v.snippet||{}, stat=v.statistics||{};
+    return '<div class="chat-data-row"><span>#'+(i+1)+' '+esc((s.title||"").slice(0,42))+(s.title&&s.title.length>42?"\u2026":"")+'</span><span style="font-weight:800;">'+fmtNum(stat.viewCount)+'</span></div>';
+  }).join("");
+  var header='<div style="font-size:10.5px;font-weight:800;color:var(--tx-3);text-transform:uppercase;margin-bottom:4px;">'+
+    (parsed.intent==="trending"?"Live trending":"Live search results")+(parsed.regionCode?(" \u00b7 "+parsed.regionCode):"")+(parsed.daysBack?(" \u00b7 last "+parsed.daysBack+" days"):"")+
+    ' \u00b7 real YouTube API data, right now</div>';
+  chatAppend("data", header+rows);
+}
+function sendChatMessage(){
+  var q=DOM.chatInput.value.trim(); if(!q) return;
+  chatAppend("user", esc(q)); DOM.chatInput.value=""; DOM.chatSendBtn.disabled=true;
+  var thinking=chatAppend("bot",'<span class="loader-ring"></span> Asking the real YouTube API...');
+  parseNaturalQuery(q).then(function(parsed){
+    return fetchRealYouTubeAnswer(parsed).then(function(videos){ thinking.remove(); renderChatDataAnswer(videos, parsed); });
+  }).catch(function(err){ thinking.remove(); chatAppend("bot","Error: "+esc(err.message)); })
+    .then(function(){ DOM.chatSendBtn.disabled=false; });
+}
+function initChat(){
+  DOM.chatFab.addEventListener("click", function(){ DOM.chatPanel.classList.toggle("hidden"); });
+  DOM.chatCloseBtn.addEventListener("click", function(){ DOM.chatPanel.classList.add("hidden"); });
+  DOM.chatSendBtn.addEventListener("click", sendChatMessage);
+  DOM.chatInput.addEventListener("keydown", function(e){ if(e.key==="Enter") sendChatMessage(); });
 }
 
 /* ---------- Gemini panel: multi-key manager + model selector ---------- */
@@ -1567,12 +1696,13 @@ function initFilterSort(){
 
 /* ---------- Edit modal ---------- */
 function openEditModal(video){
-  state.activeVideoId=video.id; state.activeVideoData=video; state.activeThumbFile=null;
+  state.activeVideoId=video.id; state.activeVideoData=video; state.activeThumbFile=null; state.tagRankMap={};
   state.activePrivacy=(video.status&&video.status.privacyStatus)||"public";
   var s=video.snippet||{}, stats=video.statistics||{}, st=video.status||{};
   var thumb=s.thumbnails&&(s.thumbnails.medium||s.thumbnails.default);
   DOM.modalVidTitle.textContent=s.title||"Untitled";
   if(thumb&&thumb.url){ DOM.modalThumb.src=thumb.url; DOM.thumbPreview.src=thumb.url; }
+  DOM.titleRankResult.textContent=""; DOM.tagScoreStatus.textContent="";
   DOM.editTitle.value=s.title||""; DOM.editDesc.value=s.description||""; DOM.editTags.value=(s.tags||[]).join(", "); renderTagChips();
   updateCharCount(DOM.editTitle,DOM.editTitleLen,50,70);
   updateCharCount(DOM.editDesc,DOM.editDescLen,200,1200);
@@ -1626,6 +1756,8 @@ function initModal(){
       DOM.tagAddInput.value=""; scheduleSeoUpdate();
     }
   });
+  DOM.checkTitleRankBtn.addEventListener("click", checkTitleRankLive);
+  DOM.scoreTagsBtn.addEventListener("click", scoreTagsLive);
   DOM.privacySeg.querySelectorAll("button").forEach(function(btn){
     btn.addEventListener("click", function(){ state.activePrivacy=btn.dataset.v; updatePrivacySeg(state.activePrivacy); });
   });
@@ -1695,11 +1827,47 @@ function removeTagFromField(text){ setTagsArray(getTagsArray().filter(function(t
 function renderTagChips(){
   var tags=getTagsArray();
   DOM.tagChips.innerHTML=tags.map(function(t){
-    return '<span class="tag-chip" data-t="'+esc(t)+'">'+esc(t)+'<button type="button" data-remove="'+esc(t)+'" title="Remove"><svg class="icon icon-sm" viewBox="0 0 24 24" style="width:10px;height:10px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>';
+    var r=state.tagRankMap[t.toLowerCase()];
+    var rankHtml = r===undefined ? "" : ('<span class="tag-chip__rank'+(r?"":" none")+'">'+(r?("#"+r):"\u2014")+'</span>');
+    return '<span class="tag-chip" data-t="'+esc(t)+'">'+rankHtml+esc(t)+'<button type="button" data-remove="'+esc(t)+'" title="Remove"><svg class="icon icon-sm" viewBox="0 0 24 24" style="width:10px;height:10px;"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>';
   }).join("");
   $$("button[data-remove]",DOM.tagChips).forEach(function(btn){
-    btn.addEventListener("click", function(){ removeTagFromField(btn.dataset.remove); scheduleSeoUpdate(); });
+    btn.addEventListener("click", function(){ removeTagFromField(btn.dataset.remove); state.tagRankMap={}; scheduleSeoUpdate(); });
   });
+}
+/* LIVE, on-demand: runs a real search.list?q=[tag] for every current tag and
+ * finds this exact video's position in the results — exactly the mechanism
+ * vidIQ itself uses for the #1/#2-style number shown on each tag chip. One
+ * YouTube API call per tag, so it's a manual button, not automatic typing. */
+function scoreTagsLive(){
+  if(!state.activeVideoId){ toast("Open a saved YouTube video first.","warn"); return; }
+  var tags=getTagsArray();
+  if(!tags.length){ toast("Add at least one tag first.","warn"); return; }
+  DOM.scoreTagsBtn.disabled=true;
+  runLiveRankCheck(state.activeVideoId, tags, function(m){ DOM.tagScoreStatus.textContent=m; })
+    .then(function(live){
+      DOM.scoreTagsBtn.disabled=false;
+      live.results.forEach(function(r){ state.tagRankMap[r.tag.toLowerCase()]=r.rank; });
+      renderTagChips();
+      var rankedCount=live.results.filter(function(r){return r.rank;}).length;
+      DOM.tagScoreStatus.textContent=rankedCount+"/"+live.results.length+" tags rank in the top 20 right now for their own exact search.";
+    }).catch(function(err){ DOM.scoreTagsBtn.disabled=false; DOM.tagScoreStatus.textContent="Error: "+err.message; });
+}
+/* LIVE: searches the video's own title text on YouTube and finds this
+ * video's real position in that search — the same mechanism, applied to
+ * the title instead of a tag. */
+function checkTitleRankLive(){
+  if(!state.activeVideoId){ toast("Open a saved YouTube video first.","warn"); return; }
+  var title=DOM.editTitle.value.trim(); if(!title){ toast("Title is empty.","warn"); return; }
+  DOM.checkTitleRankBtn.disabled=true; DOM.titleRankResult.textContent="Searching YouTube for this exact title...";
+  ytFetch("search",{part:"id",q:title,type:"video",maxResults:"20",order:"relevance"}).then(function(sr){
+    DOM.checkTitleRankBtn.disabled=false;
+    var ids=(sr.items||[]).map(function(it){return it.id.videoId;});
+    var pos=ids.indexOf(state.activeVideoId);
+    DOM.titleRankResult.innerHTML = pos>=0
+      ? '<b style="color:var(--green);">#'+(pos+1)+'</b> for this exact title, right now'
+      : '<b style="color:var(--amber);">Not in the top 20</b> for this exact title, right now';
+  }).catch(function(err){ DOM.checkTitleRankBtn.disabled=false; DOM.titleRankResult.textContent="Error: "+err.message; });
 }
 function updatePrivacySeg(val){ DOM.privacySeg.querySelectorAll("button").forEach(function(b){ b.setAttribute("aria-pressed",String(b.dataset.v===val)); }); }
 function scheduleSeoUpdate(){ clearTimeout(state.seoTimer); state.seoTimer=setTimeout(triggerSeoUpdate,160); }
@@ -1964,7 +2132,7 @@ function initFx(){
 function boot(){
   cacheDOM();
   initNav(); initGeminiPanel(); initHome(); initOAuthButtons(); initFilterSort();
-  initModal(); initSuggestButtons(); initSaveButton(); initKwPanel(); initFx(); initKebabMenu();
+  initModal(); initSuggestButtons(); initSaveButton(); initKwPanel(); initFx(); initKebabMenu(); initChat();
   var c=Cfg.loadCfg();
   if(Cfg.isOAuthValid()){
     showConnected(); loadChannelData(); scheduleTokenRefresh();
