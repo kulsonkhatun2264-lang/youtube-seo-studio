@@ -282,7 +282,7 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
 .chat-input-row .input{padding:9px 12px;font-size:12.5px;}
 
 /* Kebab / custom-pages menu */
-.kebab-menu{position:absolute;top:calc(100% + 8px);right:0;width:280px;background:#fff;border:1px solid var(--bd-strong);
+.kebab-menu{position:absolute;top:calc(100% + 8px);right:0;width:300px;max-height:80vh;overflow-y:auto;background:#fff;border:1px solid var(--bd-strong);
   border-radius:16px;box-shadow:0 20px 48px rgba(15,23,42,.18);padding:12px;z-index:60;animation:popIn .18s var(--ease);}
 .kebab-menu__title{font-size:10.5px;font-weight:800;color:var(--tx-3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
 .kebab-link{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;border-radius:10px;font-size:12.5px;font-weight:700;color:var(--tx-1);text-decoration:none;background:#F5FAFF;margin-bottom:6px;}
@@ -315,6 +315,27 @@ textarea.input{resize:vertical;min-height:80px;line-height:1.55;}
         <input id="customLinkName" class="input" placeholder="Label, e.g. Thumbnail Tool" />
         <input id="customLinkUrl" class="input" placeholder="File name, e.g. thumb-tool.html" />
         <button id="customLinkAddBtn" class="btn btn--sm btn--gold btn--block" type="button">+ Add Page Link</button>
+      </div>
+      <button id="publishToggleBtn" class="btn btn--sm btn--cyan btn--block" type="button" style="margin-top:8px;">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Publish a New Page from Here
+      </button>
+      <div id="publishPanel" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--bd);">
+        <div class="small-note" style="margin-top:0;">Paste an HTML file's code below and this publishes it straight to your GitHub repo &mdash; no need to open GitHub yourself.</div>
+        <label class="small-note" style="display:block;margin:8px 0 4px;font-weight:800;">GitHub Personal Access Token</label>
+        <div class="input-row">
+          <input id="ghTokenInput" class="input" type="password" placeholder="ghp_... (fine-grained, this repo only, Contents: Read & write)" style="flex:1;" />
+          <button id="ghTokenRevealBtn" class="btn btn--ghost btn--icon" type="button"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </div>
+        <div class="small-note">Create one at github.com &rarr; Settings &rarr; Developer settings &rarr; Fine-grained tokens &rarr; only this repository &rarr; Contents: Read and write. Treat it like a password &mdash; it's saved only in this browser.</div>
+        <label class="small-note" style="display:block;margin:10px 0 4px;font-weight:800;">Label</label>
+        <input id="ghLabelInput" class="input" placeholder="e.g. YT Data Chat" />
+        <label class="small-note" style="display:block;margin:10px 0 4px;font-weight:800;">File name</label>
+        <input id="ghFilenameInput" class="input" placeholder="e.g. yt-chat.html" />
+        <label class="small-note" style="display:block;margin:10px 0 4px;font-weight:800;">HTML code</label>
+        <textarea id="ghCodeInput" class="input" rows="5" placeholder="Paste the full HTML code here..." style="font-family:monospace;font-size:11px;"></textarea>
+        <button id="ghPublishBtn" class="btn btn--gold btn--block" type="button" style="margin-top:10px;">Publish &amp; Add to Menu</button>
+        <div id="ghPublishStatus" class="small-note"></div>
       </div>
       <div class="small-note" style="padding:0 2px 2px;">Uploaded a new .html file to GitHub for a future feature? Register it here so it always shows up in this menu &mdash; no code changes needed.</div>
     </div>
@@ -1358,6 +1379,7 @@ function cacheDOM(){
    "saveYTBtn","saveYTStatus","seoScoreNum","seoRingCircle","seoBreakdown","tabOptimize","tabKeywords","panelOptimize","panelKeywords",
    "kwInput","kwSearchBtn","kwSkeleton","kwResults","kwRelated","meDot",
    "kebabBtn","kebabMenu","customLinkList","customLinkName","customLinkUrl","customLinkAddBtn",
+   "publishToggleBtn","publishPanel","ghTokenInput","ghTokenRevealBtn","ghLabelInput","ghFilenameInput","ghCodeInput","ghPublishBtn","ghPublishStatus",
    "chatFab","chatPanel","chatCloseBtn","chatThread","chatInput","chatSendBtn"
   ].forEach(function(id){ DOM[id]=document.getElementById(id); });
 }
@@ -1416,6 +1438,49 @@ function initKebabMenu(){
       if(timedOut) return; clearTimeout(timer);
       saveLink('Saved, but could not verify the file (network/CORS) — open it from the menu to confirm it works.');
     });
+  });
+
+  /* ---- Publish a new page straight from the browser via the GitHub API ---- */
+  var GH_TOKEN_KEY="ytSeoPro.ghToken";
+  var savedToken=localStorage.getItem(GH_TOKEN_KEY);
+  if(savedToken) DOM.ghTokenInput.value=savedToken;
+  DOM.publishToggleBtn.addEventListener("click", function(){ DOM.publishPanel.classList.toggle("hidden"); });
+  DOM.ghTokenRevealBtn.addEventListener("click", function(){ DOM.ghTokenInput.type = DOM.ghTokenInput.type==="password"?"text":"password"; });
+  function getRepoInfo(){
+    var host=window.location.hostname;
+    var owner = host.indexOf(".github.io")>0 ? host.replace(".github.io","") : null;
+    var parts = window.location.pathname.split("/").filter(Boolean);
+    var repo = parts.length ? parts[0] : null;
+    return { owner:owner, repo:repo };
+  }
+  function utf8ToBase64(str){
+    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(m,p1){ return String.fromCharCode("0x"+p1); }));
+  }
+  DOM.ghPublishBtn.addEventListener("click", function(){
+    var token=DOM.ghTokenInput.value.trim(), label=DOM.ghLabelInput.value.trim(), filename=DOM.ghFilenameInput.value.trim(), code=DOM.ghCodeInput.value;
+    if(!token||!label||!filename||!code.trim()){ DOM.ghPublishStatus.textContent="Fill in the token, label, file name, and paste the code."; return; }
+    if(!/\.html?$/i.test(filename)){ DOM.ghPublishStatus.textContent="File name must end in .html"; return; }
+    var info=getRepoInfo();
+    if(!info.owner||!info.repo){ DOM.ghPublishStatus.textContent="Could not detect your GitHub username/repo from this page's URL."; return; }
+    localStorage.setItem(GH_TOKEN_KEY, token);
+    DOM.ghPublishBtn.disabled=true; DOM.ghPublishBtn.innerHTML='<span class="loader-ring"></span> Publishing to GitHub...';
+    DOM.ghPublishStatus.textContent="";
+    var api="https://api.github.com/repos/"+info.owner+"/"+info.repo+"/contents/"+encodeURIComponent(filename);
+    fetch(api,{ method:"PUT", headers:{ "Authorization":"token "+token, "Content-Type":"application/json", "Accept":"application/vnd.github+json" },
+      body: JSON.stringify({ message:"Add "+filename+" via YT SEO Studio kebab menu", content: utf8ToBase64(code) }) })
+      .then(function(res){
+        if(!res.ok) return res.json().catch(function(){return{};}).then(function(j){ throw new Error(j.message||("GitHub API error "+res.status)); });
+        return res.json();
+      }).then(function(){
+        var links=loadCustomLinks(); links.push({label:label,url:filename}); saveCustomLinks(links); renderCustomLinks();
+        DOM.ghPublishBtn.disabled=false; DOM.ghPublishBtn.innerHTML='Publish &amp; Add to Menu';
+        DOM.ghPublishStatus.textContent="Published! GitHub Pages can take 30\u201360s to go live \u2014 the menu link is ready now.";
+        DOM.ghCodeInput.value=""; DOM.ghFilenameInput.value=""; DOM.ghLabelInput.value="";
+        toast("Page published to GitHub and added to the menu!");
+      }).catch(function(err){
+        DOM.ghPublishBtn.disabled=false; DOM.ghPublishBtn.innerHTML='Publish &amp; Add to Menu';
+        DOM.ghPublishStatus.textContent="Failed: "+err.message;
+      });
   });
 }
 
